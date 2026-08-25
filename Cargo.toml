@@ -1,0 +1,12 @@
+[package]
+name = "mejorante"
+version = "0.1.0"
+edition = "2021"
+description = "Constructor auto-mejorante: muta un pedazo de su propio código y deja un hijo con mejor fitness."
+license = "MIT"
+publish = false
+repository = "https://github.com/PascualMacana/mejorante"
+
+[[bin]]
+name = "mejorante"
+path = "src/main.rs"
