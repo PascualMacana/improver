@@ -21,6 +21,14 @@ child     brain  (+ x (+ (+ (+ x x) 5) (* x x)))   sse  0
 
 That child expression is just `x² + 3x + 5` written another way.
 
+![A cell filling in as it matches the curve](cell.svg)
+
+Watch it happen in the terminal. One cell, filling up as the error drops. That is `evolve`, drawn as a body.
+
+```bash
+cargo run -- dish --seed 7
+```
+
 ## Run it
 
 You need [Rust](https://rustup.rs/).
@@ -48,6 +56,11 @@ mejorante evolve                search for a better brain
                  --build        compile that child
                  --force        overwrite a previous child
                  --write        update src/main.rs in this project
+mejorante dish                  animate a cell fitting the curve
+                 --steps N      search steps (default 120)
+                 --lambda L     mutants per step (default 30)
+                 --seed S       reproducible RNG
+                 --delay MS     ms per frame (default 80)
 mejorante spawn <dir>           copy the current genome (no search)
 mejorante genome                print the embedded sources
 ```

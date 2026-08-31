@@ -4,6 +4,8 @@
 //! en el propio fuente), lo mide contra un evaluador congelado, y si hay
 //! `--spawn` escribe un hijo que nace con esa versión.
 
+mod dish;
+
 use std::env;
 use std::error::Error;
 use std::fs;
@@ -13,11 +15,13 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 const GENERATION: u32 = 0;
 const LINEAGE: &str = "0";
-const BRAIN: &str = "0";
+pub(crate) const BRAIN: &str = "0";
 
 const GENOME: &[(&str, &str)] = &[
     ("Cargo.toml", include_str!("../Cargo.toml")),
     ("src/main.rs", include_str!("main.rs")),
+    ("src/dish.rs", include_str!("dish.rs")),
+    ("cell.svg", include_str!("../cell.svg")),
     ("README.md", include_str!("../README.md")),
     (".gitignore", include_str!("../.gitignore")),
     ("LICENSE", include_str!("../LICENSE")),
@@ -26,7 +30,7 @@ const GENOME: &[(&str, &str)] = &[
 const MAX_DEPTH: usize = 7;
 const DEFAULT_STEPS: u32 = 120;
 const DEFAULT_LAMBDA: u32 = 30;
-const XS: i32 = 5;
+pub(crate) const XS: i32 = 5;
 
 fn main() {
     let mut args = env::args().skip(1);
@@ -74,6 +78,66 @@ fn main() {
                 process::exit(1);
             }
         }
+        Some("dish") => {
+            let mut steps = DEFAULT_STEPS;
+            let mut lambda = DEFAULT_LAMBDA;
+            let mut seed = entropy_seed();
+            let mut delay_ms: u64 = 80;
+            let rest: Vec<String> = args.collect();
+            let mut it = rest.into_iter();
+            while let Some(flag) = it.next() {
+                match flag.as_str() {
+                    "--steps" => {
+                        steps = parse_u32(&next_val(&mut it, "--steps").unwrap_or_else(|e| {
+                            eprintln!("error: {e}");
+                            process::exit(2);
+                        }))
+                        .unwrap_or_else(|e| {
+                            eprintln!("error: {e}");
+                            process::exit(2);
+                        });
+                    }
+                    "--lambda" => {
+                        lambda = parse_u32(&next_val(&mut it, "--lambda").unwrap_or_else(|e| {
+                            eprintln!("error: {e}");
+                            process::exit(2);
+                        }))
+                        .unwrap_or_else(|e| {
+                            eprintln!("error: {e}");
+                            process::exit(2);
+                        });
+                    }
+                    "--seed" => {
+                        seed = parse_u64(&next_val(&mut it, "--seed").unwrap_or_else(|e| {
+                            eprintln!("error: {e}");
+                            process::exit(2);
+                        }))
+                        .unwrap_or_else(|e| {
+                            eprintln!("error: {e}");
+                            process::exit(2);
+                        });
+                    }
+                    "--delay" => {
+                        let v = next_val(&mut it, "--delay").unwrap_or_else(|e| {
+                            eprintln!("error: {e}");
+                            process::exit(2);
+                        });
+                        delay_ms = v.parse().unwrap_or_else(|_| {
+                            eprintln!("no es un número: {v}");
+                            process::exit(2);
+                        });
+                    }
+                    other => {
+                        eprintln!("flag desconocida: {other}");
+                        process::exit(2);
+                    }
+                }
+            }
+            if let Err(e) = dish::run(steps, lambda, seed, delay_ms) {
+                eprintln!("error: {e}");
+                process::exit(1);
+            }
+        }
         Some(other) => {
             eprintln!("comando desconocido: {other}\n");
             help();
@@ -98,6 +162,11 @@ cerebro: {BRAIN}
                    --build        compila al hijo
                    --force        pisa un hijo anterior
                    --write        pisa src/main.rs de este proyecto
+  mejorante dish                  anima una célula que se va ajustando
+                   --steps N      default {DEFAULT_STEPS}
+                   --lambda L     default {DEFAULT_LAMBDA}
+                   --seed S       rng reproducible
+                   --delay MS     ms entre frames (default 80)
   mejorante spawn <dir>           copia el genoma actual (sin buscar)
   mejorante genome                imprime las fuentes embebidas
 
@@ -264,15 +333,37 @@ fn evolve_cmd(args: Vec<String>) -> Result<(), Box<dyn Error>> {
 }
 
 fn evolve(steps: u32, lambda: u32, seed: u64) -> Result<Champion, Box<dyn Error>> {
+    evolve_on(steps, lambda, seed, |step, best, improved| {
+        if step == 0 || improved {
+            let mark = if best.sse == 0.0 && step > 0 {
+                "  óptimo"
+            } else if improved {
+                "  *"
+            } else {
+                ""
+            };
+            println!(
+                "paso {step:>4}  sse {:>10.2}  {}{mark}",
+                best.sse,
+                best.expr.emit()
+            );
+        }
+    })
+}
+
+pub(crate) fn evolve_on<F>(
+    steps: u32,
+    lambda: u32,
+    seed: u64,
+    mut hook: F,
+) -> Result<Champion, Box<dyn Error>>
+where
+    F: FnMut(u32, &Champion, bool),
+{
     let mut rng = Rng::new(seed);
     let expr = parse_expr(BRAIN)?;
     let mut best = Champion::from_expr(expr);
-    println!(
-        "paso {:>4}  sse {:>10.2}  {}",
-        0,
-        best.sse,
-        best.expr.emit()
-    );
+    hook(0, &best, false);
     for step in 1..=steps {
         let mut winner = best.clone();
         for _ in 0..lambda {
@@ -287,12 +378,7 @@ fn evolve(steps: u32, lambda: u32, seed: u64) -> Result<Champion, Box<dyn Error>
         }
         if winner.score < best.score {
             best = winner;
-            let mark = if best.sse == 0.0 { "  óptimo" } else { "  *" };
-            println!(
-                "paso {step:>4}  sse {:>10.2}  {}{mark}",
-                best.sse,
-                best.expr.emit()
-            );
+            hook(step, &best, true);
         }
     }
     Ok(best)
@@ -468,11 +554,11 @@ fn looks_like_mejorante(dir: &Path) -> bool {
         && main.contains("const BRAIN:")
 }
 
-fn target(x: f64) -> f64 {
+pub(crate) fn target(x: f64) -> f64 {
     x * x + 3.0 * x + 5.0
 }
 
-fn sse(expr: &Expr) -> f64 {
+pub(crate) fn sse(expr: &Expr) -> f64 {
     let mut s = 0.0;
     for i in -XS..=XS {
         let x = i as f64;
@@ -496,7 +582,7 @@ fn score(expr: &Expr) -> f64 {
 }
 
 #[derive(Clone, Debug, PartialEq)]
-enum Expr {
+pub(crate) enum Expr {
     X,
     Const(i32),
     Add(Box<Expr>, Box<Expr>),
@@ -505,9 +591,9 @@ enum Expr {
 }
 
 #[derive(Clone)]
-struct Champion {
-    expr: Expr,
-    sse: f64,
+pub(crate) struct Champion {
+    pub(crate) expr: Expr,
+    pub(crate) sse: f64,
     score: f64,
 }
 
@@ -524,7 +610,7 @@ impl Champion {
 }
 
 impl Expr {
-    fn eval(&self, x: f64) -> f64 {
+    pub(crate) fn eval(&self, x: f64) -> f64 {
         match self {
             Expr::X => x,
             Expr::Const(c) => *c as f64,
@@ -548,7 +634,7 @@ impl Expr {
         }
     }
 
-    fn emit(&self) -> String {
+    pub(crate) fn emit(&self) -> String {
         match self {
             Expr::X => "x".into(),
             Expr::Const(c) => c.to_string(),
@@ -564,7 +650,7 @@ struct Parser<'a> {
     i: usize,
 }
 
-fn parse_expr(src: &str) -> Result<Expr, Box<dyn Error>> {
+pub(crate) fn parse_expr(src: &str) -> Result<Expr, Box<dyn Error>> {
     let mut p = Parser {
         s: src.as_bytes(),
         i: 0,
@@ -795,6 +881,16 @@ mod tests {
     use super::*;
 
     #[test]
+    fn genome_lists_the_project() {
+        let names: Vec<_> = GENOME.iter().map(|(n, _)| *n).collect();
+        assert!(names.contains(&"src/main.rs"));
+        assert!(names.contains(&"src/dish.rs"));
+        assert!(names.contains(&"cell.svg"));
+        assert!(names.contains(&"Cargo.toml"));
+        assert!(names.contains(&"README.md"));
+    }
+
+    #[test]
     fn parse_roundtrip() {
         let src = "(+ (* x x) (+ (* 3 x) 5))";
         let e = parse_expr(src).unwrap();
@@ -837,6 +933,8 @@ mod tests {
         let child = fs::read_to_string(dir.join("src/main.rs")).unwrap();
         assert!(child.contains("const BRAIN: &str = \"(+ x 1)\";"));
         assert!(child.contains("const GENERATION: u32 = 1;"));
+        assert!(dir.join("src/dish.rs").exists());
+        assert!(dir.join("cell.svg").exists());
         fs::remove_dir_all(&dir).unwrap();
     }
 
