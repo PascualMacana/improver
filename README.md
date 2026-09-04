@@ -16,17 +16,17 @@ on `x = -5 … 5`. Score is the sum of squared errors (**sse**). Lower is better
 parent    brain  0                              sse  4323
   │ evolve
   ▼
-child     brain  (+ x (+ (+ (+ x x) 5) (* x x)))   sse  0
+child     brain  (+ (+ (* 3 x) (* x x)) 5)      sse  0
 ```
 
-That child expression is just `x² + 3x + 5` written another way.
+That child expression is `x² + 3x + 5`. Search may find a longer equivalent first; algebraic identities then shrink it.
 
 ![A cell filling in as it matches the curve](cell.svg)
 
-Watch it happen in the terminal. One cell, filling up as the error drops. On the right: the target curve vs the brain, and how the error falls over time.
+Watch it happen in the terminal. One cell, filling up as the error drops. On the right: the target curve vs the brain, and how the error falls over time. `dish` defaults to seed 7, which reaches a perfect fit in a few steps.
 
 ```bash
-cargo run -- dish --seed 7
+cargo run -- dish
 ```
 
 ## Run it
@@ -59,7 +59,7 @@ mejorante evolve                search for a better brain
 mejorante dish                  animate a cell fitting the curve
                  --steps N      search steps (default 120)
                  --lambda L     mutants per step (default 30)
-                 --seed S       reproducible RNG
+                 --seed S       default 7 (the reliable demo)
                  --delay MS     ms per frame (default 80)
 mejorante spawn <dir>           copy the current genome (no search)
 mejorante genome                print the embedded sources
@@ -77,7 +77,7 @@ The brain lives in a constant in `src/main.rs` as prefix notation: `x`, small in
 3. Keep the mutant with the lowest `sse + 0.01 × size`.
 4. With `--spawn`, write a full Cargo project whose source contains that brain. After you compile the child, the improvement is baked in.
 
-The scoring function never changes. Once the brain matches the target, further search can only try to make the expression smaller.
+The scoring function never changes. Once the brain matches the target, algebraic identities shrink the expression (`(+ x x)` becomes `(* 2 x)`, zeros and ones drop) without changing the fit.
 
 ## Safety
 

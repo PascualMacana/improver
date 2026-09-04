@@ -30,6 +30,7 @@ const GENOME: &[(&str, &str)] = &[
 const MAX_DEPTH: usize = 7;
 const DEFAULT_STEPS: u32 = 120;
 const DEFAULT_LAMBDA: u32 = 30;
+const DEFAULT_DISH_SEED: u64 = 7;
 pub(crate) const XS: i32 = 5;
 
 fn main() {
@@ -81,7 +82,7 @@ fn main() {
         Some("dish") => {
             let mut steps = DEFAULT_STEPS;
             let mut lambda = DEFAULT_LAMBDA;
-            let mut seed = entropy_seed();
+            let mut seed = DEFAULT_DISH_SEED;
             let mut delay_ms: u64 = 80;
             let rest: Vec<String> = args.collect();
             let mut it = rest.into_iter();
@@ -165,7 +166,7 @@ cerebro: {BRAIN}
   mejorante dish                  anima una célula que se va ajustando
                    --steps N      default {DEFAULT_STEPS}
                    --lambda L     default {DEFAULT_LAMBDA}
-                   --seed S       rng reproducible
+                   --seed S       default {DEFAULT_DISH_SEED} (demo fiable)
                    --delay MS     ms entre frames (default 80)
   mejorante spawn <dir>           copia el genoma actual (sin buscar)
   mejorante genome                imprime las fuentes embebidas
@@ -309,6 +310,7 @@ fn entropy_seed() -> u64 {
 fn evolve_cmd(args: Vec<String>) -> Result<(), Box<dyn Error>> {
     let opts = parse_evolve_opts(args)?;
     let mut history = Vec::new();
+    let mut saw_zero = false;
     let champ = evolve_on(
         opts.steps,
         opts.lambda,
@@ -317,12 +319,19 @@ fn evolve_cmd(args: Vec<String>) -> Result<(), Box<dyn Error>> {
             history.push((step, best.sse));
             if step == 0 || improved {
                 let mark = if best.sse == 0.0 && step > 0 {
-                    "  óptimo"
+                    if saw_zero {
+                        "  compactó"
+                    } else {
+                        "  óptimo"
+                    }
                 } else if improved {
                     "  *"
                 } else {
                     ""
                 };
+                if best.sse == 0.0 {
+                    saw_zero = true;
+                }
                 println!(
                     "paso {step:>4}  sse {:>10.2}  {}{mark}",
                     best.sse,
@@ -363,15 +372,23 @@ fn evolve_cmd(args: Vec<String>) -> Result<(), Box<dyn Error>> {
 
 #[cfg(test)]
 fn evolve(steps: u32, lambda: u32, seed: u64) -> Result<Champion, Box<dyn Error>> {
+    let mut saw_zero = false;
     evolve_on(steps, lambda, seed, |step, best, improved| {
         if step == 0 || improved {
             let mark = if best.sse == 0.0 && step > 0 {
-                "  óptimo"
+                if saw_zero {
+                    "  compactó"
+                } else {
+                    "  óptimo"
+                }
             } else if improved {
                 "  *"
             } else {
                 ""
             };
+            if best.sse == 0.0 {
+                saw_zero = true;
+            }
             println!(
                 "paso {step:>4}  sse {:>10.2}  {}{mark}",
                 best.sse,
@@ -394,6 +411,9 @@ where
     let expr = parse_expr(BRAIN)?;
     let mut best = Champion::from_expr(expr);
     hook(0, &best, false);
+    if try_compact(&mut best) {
+        hook(0, &best, true);
+    }
     for step in 1..=steps {
         let mut winner = best.clone();
         for _ in 0..lambda {
@@ -409,9 +429,25 @@ where
         if winner.score < best.score {
             best = winner;
             hook(step, &best, true);
+            if try_compact(&mut best) {
+                hook(step, &best, true);
+            }
         }
     }
     Ok(best)
+}
+
+fn try_compact(best: &mut Champion) -> bool {
+    if best.sse != 0.0 {
+        return false;
+    }
+    let cand = Champion::from_expr(simplify(&best.expr));
+    if cand.sse == 0.0 && cand.score < best.score {
+        *best = cand;
+        true
+    } else {
+        false
+    }
 }
 
 fn write_local_brain(brain: &str) -> Result<(), Box<dyn Error>> {
@@ -811,6 +847,149 @@ impl Expr {
     }
 }
 
+fn simplify(expr: &Expr) -> Expr {
+    let mut cur = expr.clone();
+    for _ in 0..32 {
+        let next = simplify_rec(&cur);
+        if next == cur {
+            return next;
+        }
+        cur = next;
+    }
+    cur
+}
+
+fn simplify_rec(expr: &Expr) -> Expr {
+    match expr {
+        Expr::X | Expr::Const(_) => expr.clone(),
+        Expr::Mul(a, b) => simplify_mul(simplify_rec(a), simplify_rec(b)),
+        Expr::Add(_, _) | Expr::Sub(_, _) => simplify_sum(expr),
+    }
+}
+
+fn simplify_sum(expr: &Expr) -> Expr {
+    let mut parts = Vec::new();
+    flatten_sum(expr, 1, &mut parts);
+    combine_sum(parts)
+}
+
+fn flatten_sum(expr: &Expr, sign: i32, out: &mut Vec<(i32, Expr)>) {
+    match expr {
+        Expr::Add(a, b) => {
+            flatten_sum(a, sign, out);
+            flatten_sum(b, sign, out);
+        }
+        Expr::Sub(a, b) => {
+            flatten_sum(a, sign, out);
+            flatten_sum(b, -sign, out);
+        }
+        other => {
+            let s = match other {
+                Expr::Mul(_, _) => simplify_rec(other),
+                _ => other.clone(),
+            };
+            match s {
+                Expr::Add(_, _) | Expr::Sub(_, _) => flatten_sum(&s, sign, out),
+                _ => out.push((sign, s)),
+            }
+        }
+    }
+}
+
+fn combine_sum(parts: Vec<(i32, Expr)>) -> Expr {
+    let mut k: i64 = 0;
+    let mut terms: Vec<(Expr, i32)> = Vec::new();
+    for (sign, e) in parts {
+        match e {
+            Expr::Const(c) => {
+                k += sign as i64 * c as i64;
+            }
+            Expr::Mul(a, b) => {
+                let (coeff, base) = peel_const_factor(*a, *b);
+                let coeff = coeff.saturating_mul(sign);
+                push_term(&mut terms, base, coeff);
+            }
+            other => push_term(&mut terms, other, sign),
+        }
+    }
+    rebuild_sum(k, terms)
+}
+
+fn peel_const_factor(a: Expr, b: Expr) -> (i32, Expr) {
+    match (a, b) {
+        (Expr::Const(c), e) | (e, Expr::Const(c)) => (c, e),
+        (a, b) => (1, Expr::Mul(Box::new(a), Box::new(b))),
+    }
+}
+
+fn push_term(terms: &mut Vec<(Expr, i32)>, e: Expr, c: i32) {
+    if c == 0 {
+        return;
+    }
+    if let Some((_, coeff)) = terms.iter_mut().find(|(t, _)| *t == e) {
+        *coeff = coeff.saturating_add(c);
+    } else {
+        terms.push((e, c));
+    }
+}
+
+fn rebuild_sum(k: i64, terms: Vec<(Expr, i32)>) -> Expr {
+    let mut parts: Vec<Expr> = Vec::new();
+    for (e, c) in terms {
+        if c == 0 {
+            continue;
+        }
+        parts.push(scale(c, e));
+    }
+    if k != 0 {
+        if let Ok(c) = i32::try_from(k) {
+            parts.push(Expr::Const(c));
+        }
+    }
+    if parts.is_empty() {
+        return Expr::Const(0);
+    }
+    parts.sort_by_key(|e| matches!(e, Expr::Const(_)));
+    let mut acc = parts.remove(0);
+    for p in parts {
+        acc = Expr::Add(Box::new(acc), Box::new(p));
+    }
+    acc
+}
+
+fn scale(c: i32, e: Expr) -> Expr {
+    if c == 1 {
+        e
+    } else {
+        simplify_mul(Expr::Const(c), e)
+    }
+}
+
+fn simplify_mul(a: Expr, b: Expr) -> Expr {
+    match (a, b) {
+        (Expr::Const(0), _) | (_, Expr::Const(0)) => Expr::Const(0),
+        (Expr::Const(1), e) | (e, Expr::Const(1)) => e,
+        (Expr::Const(x), Expr::Const(y)) => match x.checked_mul(y) {
+            Some(z) => Expr::Const(z),
+            None => Expr::Mul(Box::new(Expr::Const(x)), Box::new(Expr::Const(y))),
+        },
+        (Expr::Const(c), Expr::Mul(x, y)) | (Expr::Mul(x, y), Expr::Const(c)) => match (*x, *y) {
+            (Expr::Const(d), e) | (e, Expr::Const(d)) => match c.checked_mul(d) {
+                Some(z) => simplify_mul(Expr::Const(z), e),
+                None => Expr::Mul(
+                    Box::new(Expr::Const(c)),
+                    Box::new(Expr::Mul(Box::new(Expr::Const(d)), Box::new(e))),
+                ),
+            },
+            (x, y) => Expr::Mul(
+                Box::new(Expr::Const(c)),
+                Box::new(Expr::Mul(Box::new(x), Box::new(y))),
+            ),
+        },
+        (a, b) => Expr::Mul(Box::new(a), Box::new(b)),
+    }
+}
+
 struct Parser<'a> {
     s: &'a [u8],
     i: usize,
@@ -1139,6 +1318,55 @@ mod tests {
         let champ = evolve(80, 25, 1).unwrap();
         let start = sse(&parse_expr(BRAIN).unwrap());
         assert!(champ.sse < start);
+    }
+
+    #[test]
+    fn seed_7_reaches_zero_and_compacts() {
+        let champ = evolve(40, 30, DEFAULT_DISH_SEED).unwrap();
+        assert_eq!(champ.sse, 0.0);
+        assert!(champ.expr.size() < 11);
+    }
+
+    fn emit_simplified(src: &str) -> String {
+        simplify(&parse_expr(src).unwrap()).emit()
+    }
+
+    #[test]
+    fn identities_drop_neutrals() {
+        assert_eq!(emit_simplified("(+ x 0)"), "x");
+        assert_eq!(emit_simplified("(+ 0 x)"), "x");
+        assert_eq!(emit_simplified("(- x 0)"), "x");
+        assert_eq!(emit_simplified("(* x 1)"), "x");
+        assert_eq!(emit_simplified("(* 1 x)"), "x");
+        assert_eq!(emit_simplified("(* x 0)"), "0");
+    }
+
+    #[test]
+    fn identities_combine_like_terms() {
+        assert_eq!(emit_simplified("(+ x x)"), "(* 2 x)");
+        assert_eq!(emit_simplified("(- x x)"), "0");
+        assert_eq!(emit_simplified("(+ x (+ x x))"), "(* 3 x)");
+    }
+
+    #[test]
+    fn simplify_preserves_values() {
+        let src = "(+ x (+ (+ (+ x x) 5) (* x x)))";
+        let e = parse_expr(src).unwrap();
+        let s = simplify(&e);
+        assert!(s.size() < e.size());
+        assert_eq!(sse(&s), 0.0);
+        for i in -XS..=XS {
+            let x = i as f64;
+            assert_eq!(e.eval(x), s.eval(x));
+        }
+    }
+
+    #[test]
+    fn simplify_does_not_grow_a_factored_fit() {
+        let e = parse_expr("(- (* x (+ 3 x)) -5)").unwrap();
+        let s = simplify(&e);
+        assert!(s.size() <= e.size());
+        assert_eq!(sse(&s), 0.0);
     }
 
     #[test]
