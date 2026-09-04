@@ -23,7 +23,7 @@ That child expression is just `x² + 3x + 5` written another way.
 
 ![A cell filling in as it matches the curve](cell.svg)
 
-Watch it happen in the terminal. One cell, filling up as the error drops. That is `evolve`, drawn as a body.
+Watch it happen in the terminal. One cell, filling up as the error drops. On the right: the target curve vs the brain, and how the error falls over time.
 
 ```bash
 cargo run -- dish --seed 7

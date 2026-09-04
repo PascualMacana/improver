@@ -73,7 +73,7 @@ fn main() {
                     }
                 }
             }
-            if let Err(e) = spawn(Path::new(&dest), BRAIN, force, build) {
+            if let Err(e) = spawn_cmd(Path::new(&dest), BRAIN, force, build) {
                 eprintln!("error: {e}");
                 process::exit(1);
             }
@@ -152,7 +152,7 @@ fn help() {
 mejorante — constructor auto-mejorante (generación {GENERATION}, linaje {LINEAGE})
 cerebro: {BRAIN}
 
-  mejorante identity              generación, linaje, cerebro, sse
+  mejorante identity              generación, linaje, hijas, cerebro, sse
   mejorante eval [x]              cerebro vs objetivo
   mejorante evolve                busca un cerebro mejor
                    --steps N      default {DEFAULT_STEPS}
@@ -171,6 +171,7 @@ cerebro: {BRAIN}
   mejorante genome                imprime las fuentes embebidas
 
 El evaluador está congelado: f(x) = x² + 3x + 5 en x = -5..5.
+El linaje cuenta hijas, no generaciones: 0 → 0.1 → 0.1.1.
 No se copia por la red. Un solo hijo por corrida."
     );
 }
@@ -178,9 +179,12 @@ No se copia por la red. Un solo hijo por corrida."
 fn identity() -> Result<(), Box<dyn Error>> {
     let expr = parse_expr(BRAIN)?;
     let err = sse(&expr);
+    let buds = read_brotes(Path::new("."));
     println!("mejorante");
     println!("generación  {GENERATION}");
     println!("linaje      {LINEAGE}");
+    println!("hijas       {buds}");
+    println!("próximo     {}", child_lineage(LINEAGE, buds));
     println!("cerebro     {BRAIN}");
     println!("sse         {err:.4}");
     println!("tamaño      {}", expr.size());
@@ -282,7 +286,8 @@ fn parse_evolve_opts(args: Vec<String>) -> Result<EvolveOpts, Box<dyn Error>> {
 }
 
 fn next_val(it: &mut impl Iterator<Item = String>, flag: &str) -> Result<String, Box<dyn Error>> {
-    it.next().ok_or_else(|| format!("{flag} pide un valor").into())
+    it.next()
+        .ok_or_else(|| format!("{flag} pide un valor").into())
 }
 
 fn parse_u32(s: &str) -> Result<u32, Box<dyn Error>> {
@@ -303,8 +308,32 @@ fn entropy_seed() -> u64 {
 
 fn evolve_cmd(args: Vec<String>) -> Result<(), Box<dyn Error>> {
     let opts = parse_evolve_opts(args)?;
-    let champ = evolve(opts.steps, opts.lambda, opts.seed)?;
+    let mut history = Vec::new();
+    let champ = evolve_on(
+        opts.steps,
+        opts.lambda,
+        opts.seed,
+        |step, best, improved| {
+            history.push((step, best.sse));
+            if step == 0 || improved {
+                let mark = if best.sse == 0.0 && step > 0 {
+                    "  óptimo"
+                } else if improved {
+                    "  *"
+                } else {
+                    ""
+                };
+                println!(
+                    "paso {step:>4}  sse {:>10.2}  {}{mark}",
+                    best.sse,
+                    best.expr.emit()
+                );
+            }
+        },
+    )?;
     let improved = champ.sse < sse(&parse_expr(BRAIN)?) - 1e-9;
+    let sse0 = history.first().map(|p| p.1).unwrap_or(champ.sse);
+    print_sse_chart(&history, sse0);
 
     println!();
     println!("seed       {}", opts.seed);
@@ -325,13 +354,14 @@ fn evolve_cmd(args: Vec<String>) -> Result<(), Box<dyn Error>> {
         write_local_brain(&champ.expr.emit())?;
     }
     if let Some(dir) = opts.spawn_dir {
-        spawn(&dir, &champ.expr.emit(), opts.force, opts.build)?;
+        spawn_cmd(&dir, &champ.expr.emit(), opts.force, opts.build)?;
     } else if !opts.write {
         println!("(nada escrito: usá --spawn <dir> o --write)");
     }
     Ok(())
 }
 
+#[cfg(test)]
 fn evolve(steps: u32, lambda: u32, seed: u64) -> Result<Champion, Box<dyn Error>> {
     evolve_on(steps, lambda, seed, |step, best, improved| {
         if step == 0 || improved {
@@ -397,14 +427,40 @@ fn write_local_brain(brain: &str) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
+const BROTES: &str = ".brotes";
+
+pub(crate) fn child_lineage(parent: &str, buds: u32) -> String {
+    format!("{parent}.{}", buds + 1)
+}
+
+fn spawn_cmd(dest: &Path, brain: &str, force: bool, build: bool) -> Result<(), Box<dyn Error>> {
+    let dest = normalize_dest(dest)?;
+    let (lineage, record) = plan_birth(Path::new("."), LINEAGE, &dest, force)?;
+    spawn_lineage(&dest, brain, force, build, &lineage)?;
+    if record {
+        record_birth(Path::new("."))?;
+    }
+    Ok(())
+}
+
+#[cfg(test)]
 fn spawn(dest: &Path, brain: &str, force: bool, build: bool) -> Result<(), Box<dyn Error>> {
+    spawn_lineage(dest, brain, force, build, &child_lineage(LINEAGE, 0))
+}
+
+fn spawn_lineage(
+    dest: &Path,
+    brain: &str,
+    force: bool,
+    build: bool,
+    next_lineage: &str,
+) -> Result<(), Box<dyn Error>> {
     let dest = normalize_dest(dest)?;
     assert_safe_dest(&dest)?;
     prepare_dest(&dest, force)?;
 
     let next_gen = GENERATION + 1;
-    let next_lineage = format!("{LINEAGE}.{next_gen}");
-    let child_main = rewrite_main(include_str!("main.rs"), next_gen, &next_lineage, brain)?;
+    let child_main = rewrite_main(include_str!("main.rs"), next_gen, next_lineage, brain)?;
 
     for (rel, contents) in GENOME {
         let body = if *rel == "src/main.rs" {
@@ -444,18 +500,25 @@ fn rewrite_main(
     lineage: &str,
     brain: &str,
 ) -> Result<String, Box<dyn Error>> {
-    let src = patch_const_u32(src, "GENERATION", GENERATION, generation)?;
+    let src = patch_const_u32(src, "GENERATION", generation)?;
     let src = patch_const_str(&src, "LINEAGE", lineage)?;
     patch_const_str(&src, "BRAIN", brain)
 }
 
-fn patch_const_u32(src: &str, name: &str, old: u32, new: u32) -> Result<String, Box<dyn Error>> {
-    let from = format!("const {name}: u32 = {old};");
-    let to = format!("const {name}: u32 = {new};");
-    if !src.contains(&from) {
-        return Err(format!("no encuentro {name} en el genoma").into());
-    }
-    Ok(src.replacen(&from, &to, 1))
+fn patch_const_u32(src: &str, name: &str, new: u32) -> Result<String, Box<dyn Error>> {
+    let start_pat = format!("const {name}: u32 = ");
+    let start = src
+        .find(&start_pat)
+        .ok_or_else(|| format!("no encuentro {name} en el genoma"))?;
+    let value_start = start + start_pat.len();
+    let rel_end = src[value_start..]
+        .find(';')
+        .ok_or_else(|| format!("const {name} sin cierre"))?;
+    let mut out = String::with_capacity(src.len() + 8);
+    out.push_str(&src[..value_start]);
+    out.push_str(&new.to_string());
+    out.push_str(&src[value_start + rel_end..]);
+    Ok(out)
 }
 
 fn patch_const_str(src: &str, name: &str, new_val: &str) -> Result<String, Box<dyn Error>> {
@@ -476,6 +539,109 @@ fn patch_const_str(src: &str, name: &str, new_val: &str) -> Result<String, Box<d
     out.push_str(new_val);
     out.push_str(&src[value_end..]);
     Ok(out)
+}
+
+fn read_const_str(dir: &Path, name: &str) -> Option<String> {
+    let src = fs::read_to_string(dir.join("src/main.rs")).ok()?;
+    let start_pat = format!("const {name}: &str = \"");
+    let start = src.find(&start_pat)?;
+    let value_start = start + start_pat.len();
+    let rel_end = src[value_start..].find('"')?;
+    Some(src[value_start..value_start + rel_end].to_string())
+}
+
+fn read_brotes(dir: &Path) -> u32 {
+    fs::read_to_string(dir.join(BROTES))
+        .ok()
+        .and_then(|s| s.trim().parse().ok())
+        .unwrap_or(0)
+}
+
+fn record_birth(parent: &Path) -> Result<(), Box<dyn Error>> {
+    if !looks_like_mejorante(parent) {
+        return Ok(());
+    }
+    let n = read_brotes(parent) + 1;
+    fs::write(parent.join(BROTES), format!("{n}\n"))?;
+    println!(
+        "padre  hijas {n}  → próximo linaje {}",
+        child_lineage(LINEAGE, n)
+    );
+    Ok(())
+}
+
+fn plan_birth(
+    parent: &Path,
+    parent_lin: &str,
+    dest: &Path,
+    force: bool,
+) -> Result<(String, bool), Box<dyn Error>> {
+    if force && dest.exists() && looks_like_mejorante(dest) {
+        if let Some(lin) = read_const_str(dest, "LINEAGE") {
+            return Ok((lin, false));
+        }
+    }
+    Ok((child_lineage(parent_lin, read_brotes(parent)), true))
+}
+
+pub(crate) fn bin_history(history: &[(u32, f64)], width: usize) -> Vec<Option<f64>> {
+    if width == 0 {
+        return Vec::new();
+    }
+    let mut cols = vec![None; width];
+    if history.is_empty() {
+        return cols;
+    }
+    let max_step = history.iter().map(|(s, _)| *s).max().unwrap_or(0).max(1);
+    for &(step, sse) in history {
+        let x = ((step as f64 / max_step as f64) * (width - 1) as f64).round() as usize;
+        let x = x.min(width - 1);
+        cols[x] = Some(match cols[x] {
+            Some(v) => v.min(sse),
+            None => sse,
+        });
+    }
+    cols
+}
+
+fn print_sse_chart(history: &[(u32, f64)], sse0: f64) {
+    const W: usize = 44;
+    const H: usize = 10;
+    if history.is_empty() {
+        return;
+    }
+    let cols = bin_history(history, W);
+    let mut grid = vec![vec![' '; W]; H];
+    for (x, v) in cols.iter().enumerate() {
+        let Some(sse) = *v else {
+            continue;
+        };
+        let ratio = if !sse.is_finite() {
+            1.0
+        } else if sse0 <= 0.0 {
+            0.0
+        } else {
+            (sse / sse0).clamp(0.0, 1.0).sqrt()
+        };
+        let y = ((1.0 - ratio) * (H - 1) as f64).round() as usize;
+        let y = y.min(H - 1);
+        grid[y][x] = if sse == 0.0 { '@' } else { '*' };
+    }
+    println!();
+    println!("error (sse)  ·  * búsqueda  @ óptimo");
+    for (i, row) in grid.iter().enumerate() {
+        let label = if i == 0 {
+            format!("{:>8.0}", sse0)
+        } else if i + 1 == H {
+            format!("{:>8}", 0)
+        } else {
+            format!("{:>8}", "")
+        };
+        println!("{} |{}", label, row.iter().collect::<String>());
+    }
+    let last = history.last().map(|p| p.0).unwrap_or(0);
+    println!("         +{}", "-".repeat(W));
+    println!("          paso 0{:>w$}", last, w = W.saturating_sub(6));
 }
 
 fn normalize_dest(dest: &Path) -> Result<PathBuf, Box<dyn Error>> {
@@ -918,11 +1084,33 @@ mod tests {
     }
 
     #[test]
+    fn lineage_counts_daughters_not_generations() {
+        assert_eq!(child_lineage("0", 0), "0.1");
+        assert_eq!(child_lineage("0", 1), "0.2");
+        assert_eq!(child_lineage("0.1", 0), "0.1.1");
+        assert_ne!(child_lineage("0.1", 0), "0.1.2");
+    }
+
+    #[test]
     fn rewrite_patches_brain_and_generation() {
         let next = rewrite_main(include_str!("main.rs"), 1, "0.1", "(+ x 1)").unwrap();
         assert!(next.contains("const GENERATION: u32 = 1;"));
         assert!(next.contains("const LINEAGE: &str = \"0.1\";"));
         assert!(next.contains("const BRAIN: &str = \"(+ x 1)\";"));
+    }
+
+    #[test]
+    fn grandchild_lineage_is_not_generation() {
+        let child = rewrite_main(
+            include_str!("main.rs"),
+            1,
+            &child_lineage(LINEAGE, 0),
+            BRAIN,
+        )
+        .unwrap();
+        let grand = rewrite_main(&child, 2, &child_lineage("0.1", 0), BRAIN).unwrap();
+        assert!(grand.contains("const LINEAGE: &str = \"0.1.1\";"));
+        assert!(!grand.contains("const LINEAGE: &str = \"0.1.2\";"));
     }
 
     #[test]
@@ -933,6 +1121,7 @@ mod tests {
         let child = fs::read_to_string(dir.join("src/main.rs")).unwrap();
         assert!(child.contains("const BRAIN: &str = \"(+ x 1)\";"));
         assert!(child.contains("const GENERATION: u32 = 1;"));
+        assert!(child.contains("const LINEAGE: &str = \"0.1\";"));
         assert!(dir.join("src/dish.rs").exists());
         assert!(dir.join("cell.svg").exists());
         fs::remove_dir_all(&dir).unwrap();
@@ -950,5 +1139,13 @@ mod tests {
         let champ = evolve(80, 25, 1).unwrap();
         let start = sse(&parse_expr(BRAIN).unwrap());
         assert!(champ.sse < start);
+    }
+
+    #[test]
+    fn bin_history_drops_toward_zero() {
+        let h = [(0, 100.0), (10, 25.0), (20, 0.0)];
+        let cols = bin_history(&h, 5);
+        assert_eq!(cols[0], Some(100.0));
+        assert_eq!(cols[4], Some(0.0));
     }
 }

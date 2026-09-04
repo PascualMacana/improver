@@ -15,14 +15,18 @@ pub fn run(steps: u32, lambda: u32, seed: u64, delay_ms: u64) -> Result<(), Box<
     let sse0 = sse(&parse_expr(BRAIN)?);
     let _cursor = HideCursor::new();
     let mut prev_h = 0.0_f32;
+    let mut history: Vec<(u32, f64)> = Vec::new();
+    let mut last: Option<(u32, Champion, f32)> = None;
 
     evolve_on(steps, lambda, seed, |step, champ, improved| {
+        history.push((step, champ.sse));
         let points = sample(champ);
         let h = health(champ.sse, sse0);
         if step == 0 {
-            let _ = present(step, champ, sse0, h, "guess", &points);
+            let _ = present(step, champ, sse0, h, "guess", &points, &history);
             sleep(delay_ms.saturating_mul(4));
             prev_h = h;
+            last = Some((step, champ.clone(), h));
             return;
         }
         if !improved {
@@ -31,17 +35,21 @@ pub fn run(steps: u32, lambda: u32, seed: u64, delay_ms: u64) -> Result<(), Box<
         for i in 1..=MORPH {
             let t = i as f32 / MORPH as f32;
             let hi = prev_h + (h - prev_h) * t;
-            let st = if champ.sse == 0.0 {
-                "fit"
-            } else {
-                "adapting"
-            };
-            let _ = present(step, champ, sse0, hi, st, &points);
+            let st = if champ.sse == 0.0 { "fit" } else { "adapting" };
+            let _ = present(step, champ, sse0, hi, st, &points, &history);
             sleep(delay_ms);
         }
         prev_h = h;
+        last = Some((step, champ.clone(), h));
         sleep(delay_ms.saturating_mul(2));
     })?;
+
+    if let Some((step, champ, h)) = last {
+        let points = sample(&champ);
+        let st = if champ.sse == 0.0 { "fit" } else { "done" };
+        let _ = present(step, &champ, sse0, h, st, &points, &history);
+        sleep(delay_ms.saturating_mul(4));
+    }
 
     Ok(())
 }
@@ -127,12 +135,14 @@ fn present(
     h: f32,
     status: &str,
     points: &[(i32, f64, f64)],
+    history: &[(u32, f64)],
 ) -> io::Result<()> {
     let mut c = Canvas::new(WIDTH, HEIGHT);
     draw_dish(&mut c);
     let color = cell_color(h);
     put_cell(&mut c, 16, 10, h, champ.sse, color);
-    put_plot(&mut c, 36, 3, 24, 14, points, color);
+    put_plot(&mut c, 36, 1, 24, 9, points, color);
+    put_history(&mut c, 36, 11, 24, 9, history, sse0, color);
 
     let mut out = String::with_capacity(WIDTH * HEIGHT * 8);
     out.push_str("\x1b[H");
@@ -166,7 +176,7 @@ fn present(
         h * 100.0
     ));
     out.push_str(&format!("  brain  {brain}\x1b[K\n"));
-    out.push_str("  the cell is the fit — closer to the curve, fuller the body\x1b[K\n");
+    out.push_str("  left: the body  ·  right: curve vs brain, error over time\x1b[K\n");
     let mut stdout = io::stdout();
     stdout.write_all(out.as_bytes())?;
     stdout.flush()
@@ -280,6 +290,42 @@ fn put_plot(
         } else if p.is_finite() {
             c.put(px, py, 'o', color);
         }
+    }
+}
+
+fn put_history(
+    c: &mut Canvas,
+    x0: i32,
+    y0: i32,
+    w: i32,
+    h: i32,
+    history: &[(u32, f64)],
+    sse0: f64,
+    color: u8,
+) {
+    c.put(x0, y0, 'e', 90);
+    let inner_w = (w - 3).max(1) as usize;
+    let inner_h = (h - 2).max(1);
+    for x in 0..inner_w {
+        c.put(x0 + 2 + x as i32, y0 + h - 1, '·', 90);
+    }
+    let cols = crate::bin_history(history, inner_w);
+    for (col, v) in cols.iter().enumerate() {
+        let Some(sse) = *v else {
+            continue;
+        };
+        let ratio = if !sse.is_finite() {
+            1.0
+        } else if sse0 <= 0.0 {
+            0.0
+        } else {
+            (sse / sse0).clamp(0.0, 1.0).sqrt()
+        };
+        let y = y0 + 1 + ((1.0 - ratio) * (inner_h.saturating_sub(1)) as f64).round() as i32;
+        let px = x0 + 2 + col as i32;
+        let ch = if sse == 0.0 { '@' } else { '*' };
+        let fg = if sse == 0.0 { color } else { 90 };
+        c.put(px, y, ch, fg);
     }
 }
 
