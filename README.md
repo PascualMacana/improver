@@ -87,4 +87,5 @@ The scoring function never changes. Once the brain matches the target, algebraic
 
 ## Related
 
-[replicante](https://github.com/PascualMacana/replicante) is a sibling that copies itself but does not improve.
+[replicante](https://github.com/PascualMacana/replicante) is a sibling that copies itself but does not improve.  
+[demostrante](https://github.com/PascualMacana/demostrante) is a sibling that only writes a claimed improvement when a checkable proof says so.
