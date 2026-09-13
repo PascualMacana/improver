@@ -1,37 +1,37 @@
 # mejorante
 
-A small Rust program that rewrites a piece of its own source, checks whether the change is better, and can write a child project that inherits the improvement.
+Un programa chico en Rust que reescribe un pedazo de su propia fuente, comprueba si el cambio es mejor, y puede escribir un proyecto hijo que hereda la mejora.
 
-It is not a language model and it does not spread by itself. You point it at a folder; it only writes there.
+No es un modelo de lenguaje y no se copia solo. Le señalás una carpeta; sólo escribe ahí.
 
-The part that evolves is a tiny math expression called the **brain**. The program tries to match this function:
+Lo que evoluciona es una expresión matemática chica, el **cerebro**. El programa intenta encajar esta función:
 
 ```
 f(x) = x² + 3x + 5
 ```
 
-on `x = -5 … 5`. Score is the sum of squared errors (**sse**). Lower is better. Zero is a perfect fit.
+en `x = -5 … 5`. El puntaje es la suma de errores al cuadrado (**sse**). Más bajo es mejor. Cero es un encaje perfecto.
 
 ```
-parent    brain  0                              sse  4323
+padre     cerebro  0                              sse  4323
   │ evolve
   ▼
-child     brain  (+ (+ (* 3 x) (* x x)) 5)      sse  0
+hijo      cerebro  (+ (+ (* 3 x) (* x x)) 5)      sse  0
 ```
 
-That child expression is `x² + 3x + 5`. Search may find a longer equivalent first; algebraic identities then shrink it.
+Esa expresión hija es `x² + 3x + 5`. La búsqueda puede encontrar primero un equivalente más largo; después las identidades algebraicas lo achican.
 
-![A cell filling in as it matches the curve](cell.svg)
+![Una célula que se llena a medida que encaja la curva](cell.svg)
 
-Watch it happen in the terminal. One cell, filling up as the error drops. On the right: the target curve vs the brain, and how the error falls over time. `dish` defaults to seed 7, which reaches a perfect fit in a few steps.
+Míralo en la terminal. Una célula que se va llenando mientras baja el error. A la derecha: la curva objetivo vs el cerebro, y cómo cae el error a lo largo de la búsqueda. `dish` usa por defecto la seed 7, que llega al encaje perfecto en pocos pasos.
 
 ```bash
 cargo run -- dish
 ```
 
-## Run it
+## Cómo correrlo
 
-You need [Rust](https://rustup.rs/).
+Hace falta [Rust](https://rustup.rs/).
 
 ```bash
 cargo build --release
@@ -40,54 +40,54 @@ cargo build --release
 ./hijo/target/debug/mejorante identity
 ```
 
-`identity` prints the current generation, brain, and score.  
-`evolve --spawn ./hijo --build` searches for a better brain, writes a child crate into `./hijo`, and compiles it.
+`identity` imprime generación, cerebro y puntaje.  
+`evolve --spawn ./hijo --build` busca un cerebro mejor, escribe un crate hijo en `./hijo` y lo compila.
 
-## Commands
+## Comandos
 
 ```
-mejorante identity              generation, lineage, brain, score
-mejorante eval [x]              brain vs the target function
-mejorante evolve                search for a better brain
-                 --steps N      search steps (default 120)
-                 --lambda L     mutants per step (default 30)
-                 --seed S       reproducible RNG
-                 --spawn <dir>  write a child with the winner
-                 --build        compile that child
-                 --force        overwrite a previous child
-                 --write        update src/main.rs in this project
-mejorante dish                  animate a cell fitting the curve
-                 --steps N      search steps (default 120)
-                 --lambda L     mutants per step (default 30)
-                 --seed S       default 7 (the reliable demo)
-                 --delay MS     ms per frame (default 80)
-mejorante spawn <dir>           copy the current genome (no search)
-mejorante genome                print the embedded sources
+mejorante identity              generación, linaje, cerebro, puntaje
+mejorante eval [x]              cerebro vs la función objetivo
+mejorante evolve                busca un cerebro mejor
+                 --steps N      pasos de búsqueda (default 120)
+                 --lambda L     mutantes por paso (default 30)
+                 --seed S       rng reproducible
+                 --spawn <dir>  hijo con el campeón
+                 --build        compila a ese hijo
+                 --force        pisa un hijo anterior
+                 --write        pisa src/main.rs de este proyecto
+mejorante dish                  anima una célula que encaja la curva
+                 --steps N      pasos de búsqueda (default 120)
+                 --lambda L     mutantes por paso (default 30)
+                 --seed S       default 7 (la demo fiable)
+                 --delay MS     ms por cuadro (default 80)
+mejorante spawn <dir>           copia el genoma actual (sin buscar)
+mejorante genome                imprime las fuentes embebidas
 ```
 
-`--spawn` leaves this program alone and writes a selected child.  
-`--write` edits this project's `src/main.rs`; rebuild so the binary picks up the new brain.
+`--spawn` deja este programa en paz y escribe un hijo elegido.  
+`--write` edita el `src/main.rs` de este proyecto; compilá de nuevo para que el binario nazca con el cerebro nuevo.
 
-## How it works
+## Cómo funciona
 
-The brain lives in a constant in `src/main.rs` as prefix notation: `x`, small integers, `+`, `-`, `*`. Example: `(+ (* x x) 1)` means `x² + 1`.
+El cerebro vive en una constante de `src/main.rs` en notación prefija: `x`, enteros chicos, `+`, `-`, `*`. Ejemplo: `(+ (* x x) 1)` significa `x² + 1`.
 
-1. Parse the current brain into a tree.
-2. Each step makes several random mutants (swap a leaf or operator, grow, or shrink).
-3. Keep the mutant with the lowest `sse + 0.01 × size`.
-4. With `--spawn`, write a full Cargo project whose source contains that brain. After you compile the child, the improvement is baked in.
+1. Parsea el cerebro actual a un árbol.
+2. Cada paso arma varios mutantes al azar (cambia una hoja o un operador, crece o achica).
+3. Se queda con el mutante de menor `sse + 0.01 × tamaño`.
+4. Con `--spawn`, escribe un proyecto Cargo completo cuya fuente contiene ese cerebro. Cuando compilás al hijo, la mejora queda horneada.
 
-The scoring function never changes. Once the brain matches the target, algebraic identities shrink the expression (`(+ x x)` becomes `(* 2 x)`, zeros and ones drop) without changing the fit.
+La función de puntaje no cambia nunca. Cuando el cerebro encaja el objetivo, las identidades algebraicas achican la expresión (`(+ x x)` pasa a `(* 2 x)`, se caen ceros y unos) sin cambiar el encaje.
 
-## Safety
+## Seguridad
 
-- One child per run. No background loops, no network.
-- It will not write over your home directory, `/`, `/usr`, `/etc`, or the directory you are standing in.
-- `--force` only deletes a folder that already looks like a `mejorante` project.
+- Un hijo por corrida. No hay bucles en segundo plano ni red.
+- No escribe sobre el directorio home, `/`, `/usr`, `/etc`, ni el directorio en el que estás parado.
+- `--force` sólo borra una carpeta que ya parece un proyecto `mejorante`.
 
-## Related
+## Relacionados
 
-[replicante](https://github.com/PascualMacana/replicante) is a sibling that copies itself but does not improve.  
-[demostrante](https://github.com/PascualMacana/demostrante) is a sibling that only writes a claimed improvement when a checkable proof says so.  
-[reinante](https://github.com/PascualMacana/reinante) is a sibling that keeps rewriting because the target itself moves.  
-[cruzante](https://github.com/PascualMacana/cruzante) is a sibling that keeps the river crossings that were still legal.
+[replicante](https://github.com/PascualMacana/replicante) es un hermano que se copia y no mejora.  
+[demostrante](https://github.com/PascualMacana/demostrante) es un hermano que sólo escribe una mejora afirmada si hay una prueba verificable.  
+[reinante](https://github.com/PascualMacana/reinante) es un hermano que se sigue reescribiendo porque el objetivo mismo se mueve.  
+[cruzante](https://github.com/PascualMacana/cruzante) es un hermano que se queda con los cruces del río que todavía eran legales.
