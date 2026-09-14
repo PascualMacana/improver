@@ -2,7 +2,7 @@
 name = "mejorante"
 version = "0.1.0"
 edition = "2021"
-description = "Constructor auto-mejorante: muta un pedazo de su propio código y deja un hijo con mejor fitness."
+description = "A constructor that mutates a piece of its own source and leaves a fitter child."
 license = "MIT"
 publish = false
 repository = "https://github.com/PascualMacana/mejorante"
