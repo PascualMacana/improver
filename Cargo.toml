@@ -5,7 +5,7 @@ edition = "2021"
 description = "A constructor that mutates a piece of its own source and leaves a fitter child."
 license = "MIT"
 publish = false
-repository = "https://github.com/PascualMacana/mejorante"
+repository = "https://github.com/PascualMacana/improver"
 
 [[bin]]
 name = "mejorante"

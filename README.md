@@ -87,7 +87,7 @@ The scoring function never changes. Once the brain matches the target, algebraic
 
 ## Related
 
-[replicante](https://github.com/PascualMacana/replicante) is a sibling that copies itself but does not improve.  
-[demostrante](https://github.com/PascualMacana/demostrante) is a sibling that only writes a claimed improvement when a checkable proof says so.  
-[reinante](https://github.com/PascualMacana/reinante) is a sibling that keeps rewriting because the target itself moves.  
-[cruzante](https://github.com/PascualMacana/cruzante) is a sibling that keeps the river crossings that were still legal.
+[replicator](https://github.com/PascualMacana/replicator) is a sibling that copies itself but does not improve.  
+[prover](https://github.com/PascualMacana/prover) is a sibling that only writes a claimed improvement when a checkable proof says so.  
+[red-queen](https://github.com/PascualMacana/red-queen) is a sibling that keeps rewriting because the target itself moves.  
+[crosser](https://github.com/PascualMacana/crosser) is a sibling that keeps the river crossings that were still legal.
