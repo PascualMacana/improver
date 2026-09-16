@@ -94,4 +94,5 @@ The scoring function never changes. Once the brain matches the target, algebraic
 [inquirer](https://github.com/PascualMacana/inquirer) is a sibling that keeps the house assignments the clues did not refute.  
 [tide](https://github.com/PascualMacana/tide) is a sibling that keeps searching because the river's rules hop.  
 [sealer](https://github.com/PascualMacana/sealer) is a sibling that only writes a river plan when a proof says it improved.  
-[turn](https://github.com/PascualMacana/turn) is a sibling that keeps searching because the house clues hop.
+[turn](https://github.com/PascualMacana/turn) is a sibling that keeps searching because the house clues hop.  
+[closer](https://github.com/PascualMacana/closer) is a sibling that only writes a house assignment when a proof says it improved.
